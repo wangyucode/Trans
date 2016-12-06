@@ -1,0 +1,303 @@
+package sample;
+
+import javafx.event.ActionEvent;
+import javafx.fxml.FXML;
+import javafx.scene.canvas.Canvas;
+import javafx.scene.canvas.GraphicsContext;
+import javafx.scene.control.TextField;
+import javafx.scene.input.MouseEvent;
+import javafx.scene.paint.Color;
+
+public class Controller implements NetServer.NetStateChange {
+
+    @FXML
+    Canvas canvas;
+    @FXML
+    TextField tfIP;
+
+    private GraphicsContext gc;
+    private double gapX, gapY;
+    private double chessSize;
+
+    private NetServer server;
+    private NetClient client;
+
+    private static final String HEAD_NET = "net";
+    private static final String BODY_OK = "ok";
+
+
+
+    enum Chess {
+        BLACK, WHITE, NULL;
+    }
+
+    @FXML
+    protected void handleCanvasClicked(MouseEvent event) {
+        System.out.println(event.toString());
+
+        drawChess(Chess.BLACK, event.getX(), event.getY());
+
+
+    }
+
+    private void drawChess(Chess chess, double x, double y) {
+        x = gapX * ((int) ((x + gapX / 2) / gapX));
+        y = gapY * ((int) ((y + gapY / 2) / gapY));
+        switch (chess) {
+            case BLACK:
+                gc.setFill(Color.BLACK);
+                gc.fillOval(x - chessSize / 2, y - chessSize / 2, chessSize, chessSize);
+                break;
+            case WHITE:
+
+                break;
+        }
+    }
+
+    public void initialize() {
+        gc = canvas.getGraphicsContext2D();
+        gc.setFill(Color.valueOf("#F5C26A"));
+        gc.fillRect(0, 0, canvas.getWidth(), canvas.getHeight());
+        gapX = canvas.getWidth() / 20;
+        gapY = canvas.getHeight() / 20;
+        chessSize = gapX * 0.8;
+        drawLines();
+    }
+
+    private void drawLines() {
+        gc.setStroke(Color.BLACK);
+        for (int i = 1; i <= 19; i++) {
+            gc.strokeLine(i * gapX, 0, i * gapX, canvas.getHeight());
+            gc.strokeLine(0, i * gapY, canvas.getWidth(), i * gapY);
+        }
+    }
+
+    @FXML
+    protected void handleStartServer(ActionEvent event){
+        server = new NetServer();
+        server.startServer(1594);
+        server.setNetStateChangeListener(this);
+    }
+
+    @FXML
+    protected void handleConnectClicked(ActionEvent event){
+        client = new NetClient();
+        if(tfIP.getText().matches("/(\\d+)\\.(\\d+)\\.(\\d+)\\.(\\d+)/g")){
+            client.connectToServer(tfIP.getText(),1594);
+        }
+    }
+
+    @Override
+    public void onConnect() {
+        System.out.println("some one connected");
+        server.sendMessage(server.buildMessage(HEAD_NET,BODY_OK));
+    }
+
+    @Override
+    public void onServerOK() {
+        System.out.println("server OK");
+    }
+}
+
+
+
+
+package sample;
+
+import javafx.application.Application;
+import javafx.fxml.FXMLLoader;
+import javafx.scene.Parent;
+import javafx.scene.Scene;
+import javafx.stage.Stage;
+
+
+public class Main extends Application {
+
+    @Override
+    public void start(Stage primaryStage) throws Exception{
+        Parent root = FXMLLoader.load(getClass().getResource("sample.fxml"));
+        primaryStage.setTitle("五子棋");
+        primaryStage.setScene(new Scene(root, 740, 520));
+        primaryStage.show();
+    }
+
+
+    public static void main(String[] args) {
+        launch(args);
+    }
+}
+
+
+
+package sample;
+
+import java.io.IOException;
+import java.net.Socket;
+
+/**
+ * 网络客户端
+ */
+public class NetClient {
+
+    private Socket clientSocket;
+
+    public void connectToServer(String ip, int port) {
+        try {
+            clientSocket = new Socket(ip,port);
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+}
+
+
+
+package sample;
+
+import java.io.*;
+import java.net.ServerSocket;
+import java.net.Socket;
+import java.text.SimpleDateFormat;
+import java.util.Date;
+
+/**
+ * 网络服务器
+ */
+public class NetServer implements Runnable {
+
+    private ServerSocket serverSocket;
+    private Socket socket;
+    private InputStream is;
+    private OutputStream os;
+    private BufferedReader br;
+    private BufferedWriter bw;
+    
+
+
+    private NetStateChange nsc;
+
+
+    public void startServer(int port) {
+        try {
+            serverSocket = new ServerSocket(port);
+            System.out.println(serverSocket.getInetAddress());
+            new Thread(this).start();
+            if(nsc!=null){
+                nsc.onServerOK();
+            }
+
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+
+    @Override
+    public void run() {
+        if (this.serverSocket != null) {
+            while (true) {
+                try {
+                    socket = serverSocket.accept();
+                    init();
+                    if (nsc != null) {
+                        nsc.onConnect();
+                    }
+                } catch (IOException e) {
+                    System.out.print("Server failure\n");
+                    e.printStackTrace();
+                    try {
+                        this.serverSocket.close();
+                    } catch (IOException ex) {
+                        //ignore this;
+                    }
+                    break;
+                }
+            }
+        }
+    }
+
+
+
+    public interface NetStateChange {
+        void onServerOK();
+        void onConnect();
+    }
+    
+
+    public void setNetStateChangeListener(NetStateChange nsc) {
+        this.nsc = nsc;
+    }
+
+
+    /**
+     * 初始化用于接收/发送的流处理
+     *
+     * @throws IOException
+     */
+    private void init() throws IOException {
+        is = socket.getInputStream();
+        os = socket.getOutputStream();
+        br = new BufferedReader(new InputStreamReader(is, "utf-8"));
+        bw = new BufferedWriter(new OutputStreamWriter(os, "utf-8"));
+    }
+
+    public void sendMessage(String message) {
+        try {
+            bw.write(message);
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+
+    public String readMessage() {
+        String message = null;
+        try {
+            message = br.readLine();
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+        return message;
+    }
+
+    public String buildMessage(String head, String body) {
+        return head + '|' + new SimpleDateFormat("yyyy/mm/dd HH:MM:ss").format(new Date()) + '|' + body;
+    }
+}
+
+
+<?xml version="1.0" encoding="UTF-8"?>
+
+<?import javafx.geometry.Insets?>
+<?import javafx.scene.canvas.Canvas?>
+<?import javafx.scene.control.Button?>
+<?import javafx.scene.control.Hyperlink?>
+<?import javafx.scene.control.Label?>
+<?import javafx.scene.control.TextField?>
+<?import javafx.scene.layout.ColumnConstraints?>
+<?import javafx.scene.layout.GridPane?>
+<?import javafx.scene.layout.RowConstraints?>
+
+<GridPane alignment="center" hgap="10" vgap="10" xmlns="http://javafx.com/javafx/8.0.60" xmlns:fx="http://javafx.com/fxml/1" fx:controller="sample.Controller">
+   <padding>
+      <Insets bottom="10.0" left="10.0" right="10.0" top="10.0" />
+   </padding>
+   <columnConstraints>
+      <ColumnConstraints />
+      <ColumnConstraints />
+      <ColumnConstraints />
+   </columnConstraints>
+   <rowConstraints>
+      <RowConstraints />
+      <RowConstraints />
+      <RowConstraints />
+      <RowConstraints />
+   </rowConstraints>
+   <children>
+      <Canvas fx:id="canvas" height="500.0" onMouseClicked="#handleCanvasClicked" width="500.0" GridPane.hgrow="ALWAYS" GridPane.rowSpan="4" />
+      <Label prefWidth="200.0" text="本机IP：127.0.0.1" GridPane.columnIndex="1" GridPane.columnSpan="2" />
+      <TextField fx:id="tfIP" promptText="请输入对方IP" GridPane.columnIndex="1" GridPane.rowIndex="1" />
+      <Button mnemonicParsing="false" onAction="#handleConnectClicked" text="连接" GridPane.columnIndex="2" GridPane.rowIndex="1" />
+      <TextField prefHeight="412.0" prefWidth="200.0" GridPane.columnIndex="1" GridPane.columnSpan="2" GridPane.hgrow="ALWAYS" GridPane.rowIndex="2" />
+      <Hyperlink text="wycode.cn" GridPane.columnIndex="1" GridPane.columnSpan="2" GridPane.rowIndex="3" />
+      <Button mnemonicParsing="false" onAction="#handleStartServer" text="建主" GridPane.columnIndex="2" />
+   </children>
+</GridPane>
