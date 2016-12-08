@@ -1,70 +1,242 @@
 package sample;
 
 import javafx.event.ActionEvent;
+import javafx.event.EventHandler;
 import javafx.fxml.FXML;
 import javafx.scene.canvas.Canvas;
 import javafx.scene.canvas.GraphicsContext;
-import javafx.scene.control.TextField;
+import javafx.scene.control.*;
 import javafx.scene.input.MouseEvent;
 import javafx.scene.paint.Color;
 
-public class Controller implements NetServer.NetStateChange {
+import java.net.InetAddress;
+import java.net.UnknownHostException;
+
+public class Controller implements NetService.NetStateChange, EventHandler<DialogEvent> {
 
     @FXML
     Canvas canvas;
     @FXML
     TextField tfIP;
+    @FXML
+    TextField tfMessage;
+    @FXML
+    TextArea taContent;
+    @FXML
+    Label lbIP;
+    @FXML
+    Button btnConnect;
+    @FXML
+    Button btnStart;
+    @FXML
+    Button btnSend;
 
     private GraphicsContext gc;
     private double gapX, gapY;
     private double chessSize;
 
-    private NetServer server;
-    private NetClient client;
+    private NetService server;
+    private NetService client;
 
-    private static final String HEAD_NET = "net";
-    private static final String BODY_OK = "ok";
+    static final String HEAD_NET = "net";
+    static final String BODY_OK = "ok";
+    static final String HEAD_MSG = "msg";
+    static final String HEAD_CHESS = "chess";
 
 
 
-    enum Chess {
-        BLACK, WHITE, NULL;
+    private enum Chess {
+        BLACK, WHITE
     }
+
+    public enum NetType {
+        SERVER, CLIENT
+    }
+
+    private enum Direction {
+        TOP_LEFT, TOP, TOP_RIGHT, RIGHT, RIGHT_DOWN, DOWN, DOWN_LEFT, LEFT
+    }
+
+    static NetType netType;
+
+    private Chess currentChess;
+    private Chess[][] game = new Chess[21][21];
 
     @FXML
     protected void handleCanvasClicked(MouseEvent event) {
-        System.out.println(event.toString());
 
-        drawChess(Chess.BLACK, event.getX(), event.getY());
-
-
+        if (netType == NetType.SERVER) {
+            if (currentChess == Chess.BLACK) {
+                Position p = drawChess(currentChess, convertX(event.getX()), convertY(event.getY()));
+                if (game[p.x][p.y] == currentChess) {
+                    return;
+                }
+                server.sendMessage(server.buildMessage(HEAD_CHESS, p.toString()));
+                taContent.appendText("[主机]走子：" + p.x + "，" + p.y + "\n");
+                currentChess = Chess.WHITE;
+                game[p.x][p.y] = Chess.BLACK;
+                checkWinner(p.x, p.y);
+            } else {
+                taContent.appendText("[系统]请等待客户端走棋\n");
+            }
+        } else if (netType == NetType.CLIENT) {
+            if (currentChess == Chess.WHITE) {
+                Position p = drawChess(currentChess, convertX(event.getX()), convertY(event.getY()));
+                if (game[p.x][p.y] == currentChess) {
+                    return;
+                }
+                client.sendMessage(client.buildMessage(HEAD_CHESS, p.toString()));
+                taContent.appendText("[客户端]走子：" + p.x + "，" + p.y + "\n");
+                currentChess = Chess.BLACK;
+                game[p.x][p.y] = Chess.WHITE;
+                checkWinner(p.x, p.y);
+            } else {
+                taContent.appendText("[系统]请等待主机走棋\n");
+            }
+        }
     }
 
-    private void drawChess(Chess chess, double x, double y) {
-        x = gapX * ((int) ((x + gapX / 2) / gapX));
-        y = gapY * ((int) ((y + gapY / 2) / gapY));
+    private void checkWinner(int x, int y) {
+        Chess thisChess = game[x][y];
+        if (thisChess == null) {
+            return;
+        }
+
+        int left2Right = 1 + countChessNum(Direction.LEFT, thisChess, x, y) + countChessNum(Direction.RIGHT, thisChess, x, y);
+        System.out.println("left2Right=" + left2Right);
+        if (left2Right >= 5) {
+            win(thisChess);
+            return;
+        }
+
+        int top2Down = 1 + countChessNum(Direction.TOP, thisChess, x, y) + countChessNum(Direction.DOWN, thisChess, x, y);
+        System.out.println("top2Down=" + top2Down);
+        if (top2Down >= 5) {
+            win(thisChess);
+            return;
+        }
+
+        int topLeft2RightDown = 1 + countChessNum(Direction.TOP_LEFT, thisChess, x, y) + countChessNum(Direction.RIGHT_DOWN, thisChess, x, y);
+        System.out.println("topLeft2RightDown=" + topLeft2RightDown);
+        if (topLeft2RightDown >= 5) {
+            win(thisChess);
+            return;
+        }
+
+        int topRight2DownLeft = 1 + countChessNum(Direction.TOP_RIGHT, thisChess, x, y) + countChessNum(Direction.DOWN_LEFT, thisChess, x, y);
+        System.out.println("topRight2DownLeft=" + topRight2DownLeft);
+        if (topRight2DownLeft >= 5) {
+            win(thisChess);
+        }
+    }
+
+    private void win(Chess thisChess) {
+        Alert alert = new Alert(Alert.AlertType.INFORMATION, thisChess == Chess.BLACK ? "黑棋获胜！" : "白棋获胜", ButtonType.OK);
+        alert.show();
+        currentChess = Chess.BLACK;
+        alert.setOnCloseRequest(this);
+    }
+
+    @Override
+    public void handle(DialogEvent event) {
+        cleanChessBoard();
+    }
+
+
+
+    private int countChessNum(Direction direction, Chess thisChess, int x, int y) {
+        int num = 0;
+        switch (direction) {
+            case TOP_LEFT:
+                if (x - 1 >= 0 && y - 1 >= 0 && thisChess == game[x - 1][y - 1]) {
+                    num++;
+                    num += countChessNum(direction, thisChess, x - 1, y - 1);
+                }
+                break;
+            case TOP:
+                if (y - 1 >= 0 && thisChess == game[x][y - 1]) {
+                    num++;
+                    num += countChessNum(direction, thisChess, x, y - 1);
+                }
+                break;
+            case TOP_RIGHT:
+                if (x + 1 <= 20 && y - 1 >= 0 && thisChess == game[x + 1][y - 1]) {
+                    num++;
+                    num += countChessNum(direction, thisChess, x + 1, y - 1);
+                }
+                break;
+            case RIGHT:
+                if (x + 1 <= 20 && thisChess == game[x + 1][y]) {
+                    num++;
+                    num += countChessNum(direction, thisChess, x + 1, y);
+                }
+                break;
+            case RIGHT_DOWN:
+                if (x + 1 <= 20 && y + 1 <= 20 && thisChess == game[x + 1][y + 1]) {
+                    num++;
+                    num += countChessNum(direction, thisChess, x + 1, y + 1);
+                }
+                break;
+            case DOWN:
+                if (y + 1 <= 20 && thisChess == game[x][y + 1]) {
+                    num++;
+                    num += countChessNum(direction, thisChess, x, y + 1);
+                }
+                break;
+            case DOWN_LEFT:
+                if (x - 1 >= 0 && y + 1 <= 20 && thisChess == game[x - 1][y + 1]) {
+                    num++;
+                    num += countChessNum(direction, thisChess, x - 1, y + 1);
+                }
+                break;
+            case LEFT:
+                if (x - 1 >= 0 && thisChess == game[x - 1][y]) {
+                    num++;
+                    num += countChessNum(direction, thisChess, x - 1, y);
+                }
+                break;
+        }
+        return num;
+    }
+
+    private double convertX(double x) {
+        return gapX * ((int) ((x + gapX / 2) / gapX));
+    }
+
+    private double convertY(double y) {
+        return gapY * ((int) ((y + gapY / 2) / gapY));
+    }
+
+    private Position drawChess(Chess chess, double x, double y) {
         switch (chess) {
             case BLACK:
                 gc.setFill(Color.BLACK);
                 gc.fillOval(x - chessSize / 2, y - chessSize / 2, chessSize, chessSize);
                 break;
             case WHITE:
-
+                gc.setFill(Color.WHITE);
+                gc.fillOval(x - chessSize / 2, y - chessSize / 2, chessSize, chessSize);
                 break;
         }
+        return new Position((int) (x / gapX), (int) (y / gapY));
     }
 
     public void initialize() {
         gc = canvas.getGraphicsContext2D();
-        gc.setFill(Color.valueOf("#F5C26A"));
-        gc.fillRect(0, 0, canvas.getWidth(), canvas.getHeight());
         gapX = canvas.getWidth() / 20;
         gapY = canvas.getHeight() / 20;
         chessSize = gapX * 0.8;
-        drawLines();
+        cleanChessBoard();
+        try {
+            lbIP.setText("本机IP：" + InetAddress.getLocalHost().getHostAddress());
+        } catch (UnknownHostException e) {
+            e.printStackTrace();
+        }
     }
 
-    private void drawLines() {
+    private void cleanChessBoard() {
+        gc.setFill(Color.valueOf("#F5C26A"));
+        gc.fillRect(0, 0, canvas.getWidth(), canvas.getHeight());
         gc.setStroke(Color.BLACK);
         for (int i = 1; i <= 19; i++) {
             gc.strokeLine(i * gapX, 0, i * gapX, canvas.getHeight());
@@ -73,31 +245,121 @@ public class Controller implements NetServer.NetStateChange {
     }
 
     @FXML
-    protected void handleStartServer(ActionEvent event){
-        server = new NetServer();
-        server.startServer(1594);
+    protected void handleStartServer(ActionEvent event) {
+        server = NetService.getInstance(NetType.SERVER);
+        server.startServer();
         server.setNetStateChangeListener(this);
+        netType = NetType.SERVER;
     }
 
     @FXML
-    protected void handleConnectClicked(ActionEvent event){
-        client = new NetClient();
-        if(tfIP.getText().matches("/(\\d+)\\.(\\d+)\\.(\\d+)\\.(\\d+)/g")){
-            client.connectToServer(tfIP.getText(),1594);
+    protected void handleConnectClicked(ActionEvent event) {
+
+        if (tfIP.getText().matches("(\\d+)\\.(\\d+)\\.(\\d+)\\.(\\d+)")) {
+            client = NetService.getInstance(NetType.CLIENT);
+            client.setNetStateChangeListener(this);
+            client.connectToServer(tfIP.getText());
+            netType = NetType.CLIENT;
+        }
+    }
+
+    @FXML
+    protected void handleSendClicked(ActionEvent event) {
+        if (tfMessage.getText().length() > 0) {
+            if (netType == NetType.SERVER) {
+                String message = server.buildMessage(HEAD_MSG, tfMessage.getText());
+                server.sendMessage(message);
+                taContent.appendText("[主机]" + tfMessage.getText() + "\n");
+            } else if (netType == NetType.CLIENT) {
+                String message = client.buildMessage(HEAD_MSG, tfMessage.getText());
+                client.sendMessage(message);
+                taContent.appendText("[客户端]" + tfMessage.getText() + "\n");
+            }
         }
     }
 
     @Override
     public void onConnect() {
         System.out.println("some one connected");
-        server.sendMessage(server.buildMessage(HEAD_NET,BODY_OK));
+        server.sendMessage(server.buildMessage(HEAD_NET, BODY_OK));
+        taContent.appendText("[系统]客户端已连接！\n");
+        tfMessage.setDisable(false);
+        btnSend.setDisable(false);
+        taContent.appendText("[系统]主机执黑棋，先走\n");
+        currentChess = Chess.BLACK;
     }
+
+    @Override
+    public void onMessage(String message) {
+        System.out.println(message);
+        String[] msgArray = message.split(":");
+        switch (msgArray[0]) {
+            case HEAD_NET:
+                if (msgArray[1].equals(BODY_OK)) {
+                    taContent.appendText("[系统]已连接到主机！\n");
+                    tfMessage.setDisable(false);
+                    btnSend.setDisable(false);
+                    tfIP.setDisable(true);
+                    btnStart.setDisable(true);
+                    btnConnect.setDisable(true);
+                    taContent.appendText("[系统]客户端执白棋，请等待主机先走\n");
+                }
+                break;
+            case HEAD_MSG:
+                StringBuilder msgContent = new StringBuilder();
+                for (int i = 1; i < msgArray.length; i++) {
+                    msgContent.append(msgArray[i]);
+                }
+
+                if (netType == NetType.SERVER) {
+                    taContent.appendText("[客户端]" + msgContent.toString() + "\n");
+                } else if (netType == NetType.CLIENT) {
+                    taContent.appendText("[主机]" + msgContent.toString() + "\n");
+                }
+                break;
+            case HEAD_CHESS:
+                if (netType == NetType.SERVER) {
+                    taContent.appendText("[客户端]走子：" + msgArray[1] + "," + msgArray[2] + "\n");
+                    Position p = drawChess(Chess.WHITE, Double.parseDouble(msgArray[1]) * gapX, Double.parseDouble(msgArray[2]) * gapY);
+                    game[p.x][p.y] = Chess.WHITE;
+                    checkWinner(p.x, p.y);
+                    currentChess = Chess.BLACK;
+                } else if (netType == NetType.CLIENT) {
+                    taContent.appendText("[主机]走子：" + msgArray[1] + "," + msgArray[2] + "\n");
+                    Position p = drawChess(Chess.BLACK, Double.parseDouble(msgArray[1]) * gapX, Double.parseDouble(msgArray[2]) * gapY);
+                    game[p.x][p.y] = Chess.BLACK;
+                    checkWinner(p.x, p.y);
+                    currentChess = Chess.WHITE;
+                }
+        }
+    }
+
 
     @Override
     public void onServerOK() {
         System.out.println("server OK");
+        taContent.appendText("[系统]建主成功！\n");
+        btnStart.setDisable(true);
+        btnConnect.setDisable(true);
+        tfIP.setDisable(true);
+    }
+
+    class Position {
+        int x;
+        int y;
+
+        public Position(int x, int y) {
+            this.x = x;
+            this.y = y;
+        }
+
+        @Override
+        public String toString() {
+            return x + ":" + y;
+        }
     }
 }
+
 
 
 
@@ -105,48 +367,40 @@ public class Controller implements NetServer.NetStateChange {
 package sample;
 
 import javafx.application.Application;
+import javafx.event.EventHandler;
 import javafx.fxml.FXMLLoader;
 import javafx.scene.Parent;
 import javafx.scene.Scene;
 import javafx.stage.Stage;
+import javafx.stage.WindowEvent;
 
 
-public class Main extends Application {
+public class Main extends Application implements EventHandler<WindowEvent> {
 
     @Override
-    public void start(Stage primaryStage) throws Exception{
+    public void start(Stage primaryStage) throws Exception {
         Parent root = FXMLLoader.load(getClass().getResource("sample.fxml"));
         primaryStage.setTitle("五子棋");
         primaryStage.setScene(new Scene(root, 740, 520));
+        primaryStage.setResizable(false);
         primaryStage.show();
+        primaryStage.setOnCloseRequest(this);
     }
 
 
     public static void main(String[] args) {
         launch(args);
     }
-}
 
-
-
-package sample;
-
-import java.io.IOException;
-import java.net.Socket;
-
-/**
- * 网络客户端
- */
-public class NetClient {
-
-    private Socket clientSocket;
-
-    public void connectToServer(String ip, int port) {
+    @Override
+    public void handle(WindowEvent event) {
         try {
-            clientSocket = new Socket(ip,port);
-        } catch (IOException e) {
-            e.printStackTrace();
+            NetService.getInstance(Controller.netType).close();
+        } catch (Exception e) {
+            //ignore this
         }
+        System.exit(0);
+
     }
 }
 
@@ -157,95 +411,101 @@ package sample;
 import java.io.*;
 import java.net.ServerSocket;
 import java.net.Socket;
-import java.text.SimpleDateFormat;
-import java.util.Date;
 
 /**
- * 网络服务器
+ *
  */
-public class NetServer implements Runnable {
+public class NetService {
 
-    private ServerSocket serverSocket;
     private Socket socket;
     private InputStream is;
     private OutputStream os;
     private BufferedReader br;
-    private BufferedWriter bw;
-    
-
+    private PrintWriter pw;
 
     private NetStateChange nsc;
 
+    private ServerSocket serverSocket;
 
-    public void startServer(int port) {
+    private static final int PORT = 1594;
+
+    private static NetService client;
+    private static NetService server;
+
+    private NetService(){}
+
+    public static NetService getInstance(Controller.NetType netType){
+        switch (netType){
+            case CLIENT:
+                if(client==null){
+                    client = new NetService();
+                }
+                return client;
+            case SERVER:
+                if(server==null){
+                    server = new NetService();
+                }
+                return server;
+            default:
+                return server;
+        }
+    }
+
+
+    public void startServer() {
+        new ServerThread().start();
+    }
+
+
+    void connectToServer(String ip) {
         try {
-            serverSocket = new ServerSocket(port);
-            System.out.println(serverSocket.getInetAddress());
-            new Thread(this).start();
-            if(nsc!=null){
-                nsc.onServerOK();
-            }
-
+            socket = new Socket(ip, PORT);
+            init();
+            startRead();
         } catch (IOException e) {
             e.printStackTrace();
         }
     }
-
-    @Override
-    public void run() {
-        if (this.serverSocket != null) {
-            while (true) {
-                try {
-                    socket = serverSocket.accept();
-                    init();
-                    if (nsc != null) {
-                        nsc.onConnect();
-                    }
-                } catch (IOException e) {
-                    System.out.print("Server failure\n");
-                    e.printStackTrace();
-                    try {
-                        this.serverSocket.close();
-                    } catch (IOException ex) {
-                        //ignore this;
-                    }
-                    break;
-                }
-            }
-        }
-    }
-
-
-
-    public interface NetStateChange {
-        void onServerOK();
-        void onConnect();
-    }
-    
-
-    public void setNetStateChangeListener(NetStateChange nsc) {
-        this.nsc = nsc;
-    }
-
 
     /**
      * 初始化用于接收/发送的流处理
      *
      * @throws IOException
      */
-    private void init() throws IOException {
+    void init() throws IOException {
         is = socket.getInputStream();
         os = socket.getOutputStream();
         br = new BufferedReader(new InputStreamReader(is, "utf-8"));
-        bw = new BufferedWriter(new OutputStreamWriter(os, "utf-8"));
+        pw = new PrintWriter(new OutputStreamWriter(os, "utf-8"));
+    }
+
+    void startRead() {
+        ReadThread reader = new ReadThread();
+        reader.start();
     }
 
     public void sendMessage(String message) {
+        pw.println(message);
+        pw.flush();
+    }
+
+    public void close() {
         try {
-            bw.write(message);
+            br.close();
+            pw.close();
+            socket.close();
+            serverSocket.close();
         } catch (IOException e) {
             e.printStackTrace();
         }
+    }
+
+    interface NetStateChange {
+        void onServerOK();
+
+        void onConnect();
+
+        void onMessage(String message);
     }
 
     public String readMessage() {
@@ -258,10 +518,62 @@ public class NetServer implements Runnable {
         return message;
     }
 
-    public String buildMessage(String head, String body) {
-        return head + '|' + new SimpleDateFormat("yyyy/mm/dd HH:MM:ss").format(new Date()) + '|' + body;
+    String buildMessage(String head, String body) {
+        return head + ':' + body;
+    }
+
+
+    void setNetStateChangeListener(NetStateChange nsc) {
+        this.nsc = nsc;
+    }
+
+    class ServerThread extends Thread {
+        @Override
+        public void run() {
+            while (true) {
+                try {
+                    serverSocket = new ServerSocket(PORT);
+                    System.out.println(serverSocket.getInetAddress());
+                    if (nsc != null) {
+                        nsc.onServerOK();
+                    }
+                    socket = serverSocket.accept();
+                    init();
+                    if (nsc != null) {
+                        nsc.onConnect();
+                        nsc.onMessage(buildMessage(Controller.HEAD_NET, "some one connected!"));
+                    }
+                    startRead();
+                    break;
+                } catch (IOException e) {
+                    System.out.print("Server failure\n");
+                    e.printStackTrace();
+                    try {
+                        serverSocket.close();
+                    } catch (IOException ex) {
+                        //ignore this;
+                    }
+                }
+            }
+        }
+    }
+
+    class ReadThread extends Thread {
+
+        @Override
+        public void run() {
+            while (true) {
+                String message = readMessage();
+                if (message != null && message.length() > 0) {
+                    if (nsc != null) {
+                        nsc.onMessage(message);
+                    }
+                }
+            }
+        }
     }
 }
+
 
 
 <?xml version="1.0" encoding="UTF-8"?>
@@ -271,6 +583,7 @@ public class NetServer implements Runnable {
 <?import javafx.scene.control.Button?>
 <?import javafx.scene.control.Hyperlink?>
 <?import javafx.scene.control.Label?>
+<?import javafx.scene.control.TextArea?>
 <?import javafx.scene.control.TextField?>
 <?import javafx.scene.layout.ColumnConstraints?>
 <?import javafx.scene.layout.GridPane?>
@@ -290,14 +603,18 @@ public class NetServer implements Runnable {
       <RowConstraints />
       <RowConstraints />
       <RowConstraints />
+      <RowConstraints />
    </rowConstraints>
    <children>
-      <Canvas fx:id="canvas" height="500.0" onMouseClicked="#handleCanvasClicked" width="500.0" GridPane.hgrow="ALWAYS" GridPane.rowSpan="4" />
-      <Label prefWidth="200.0" text="本机IP：127.0.0.1" GridPane.columnIndex="1" GridPane.columnSpan="2" />
+      <Canvas fx:id="canvas" height="500.0" onMouseClicked="#handleCanvasClicked" width="500.0" GridPane.hgrow="ALWAYS" GridPane.rowSpan="5" />
+      <Label fx:id="lbIP" prefWidth="200.0" text="本机IP：127.0.0.1" GridPane.columnIndex="1" GridPane.columnSpan="2" />
       <TextField fx:id="tfIP" promptText="请输入对方IP" GridPane.columnIndex="1" GridPane.rowIndex="1" />
-      <Button mnemonicParsing="false" onAction="#handleConnectClicked" text="连接" GridPane.columnIndex="2" GridPane.rowIndex="1" />
-      <TextField prefHeight="412.0" prefWidth="200.0" GridPane.columnIndex="1" GridPane.columnSpan="2" GridPane.hgrow="ALWAYS" GridPane.rowIndex="2" />
-      <Hyperlink text="wycode.cn" GridPane.columnIndex="1" GridPane.columnSpan="2" GridPane.rowIndex="3" />
-      <Button mnemonicParsing="false" onAction="#handleStartServer" text="建主" GridPane.columnIndex="2" />
+      <Button fx:id="btnConnect" mnemonicParsing="false" onAction="#handleConnectClicked" text="连接" GridPane.columnIndex="2" GridPane.rowIndex="1" />
+      <TextArea fx:id="taContent" editable="false" prefHeight="371.0" prefWidth="200.0" scrollLeft="2.0" scrollTop="2.0" wrapText="true" GridPane.columnIndex="1" GridPane.columnSpan="2" GridPane.hgrow="ALWAYS" GridPane.rowIndex="2" />
+      <Hyperlink text="wycode.cn" GridPane.columnIndex="1" GridPane.columnSpan="2" GridPane.rowIndex="4" />
+      <Button fx:id="btnStart" mnemonicParsing="false" onAction="#handleStartServer" text="建主" GridPane.columnIndex="2" />
+      <TextField fx:id="tfMessage" disable="true" prefHeight="23.0" prefWidth="149.0" GridPane.columnIndex="1" GridPane.rowIndex="3" />
+      <Button fx:id="btnSend" disable="true" mnemonicParsing="false" onAction="#handleSendClicked" text="发送" GridPane.columnIndex="2" GridPane.rowIndex="3" />
    </children>
 </GridPane>
+
