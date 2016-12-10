@@ -42,7 +42,9 @@ public class Controller implements NetService.NetStateChange, EventHandler<Dialo
     static final String BODY_OK = "ok";
     static final String HEAD_MSG = "msg";
     static final String HEAD_CHESS = "chess";
+    static final String HEAD_GAME = "game";
 
+    private boolean isOtherOK = true;
 
 
     private enum Chess {
@@ -66,34 +68,43 @@ public class Controller implements NetService.NetStateChange, EventHandler<Dialo
     protected void handleCanvasClicked(MouseEvent event) {
 
         if (netType == NetType.SERVER) {
-            if (currentChess == Chess.BLACK) {
-                Position p = drawChess(currentChess, convertX(event.getX()), convertY(event.getY()));
-                if (game[p.x][p.y] == currentChess) {
-                    return;
+            if (isOtherOK) {
+                if (currentChess == Chess.BLACK) {
+                    Position p = drawChess(currentChess, convertX(event.getX()), convertY(event.getY()));
+                    if (game[p.x][p.y] == currentChess) {
+                        return;
+                    }
+                    server.sendMessage(server.buildMessage(HEAD_CHESS, p.toString()));
+                    taContent.appendText("[主机]走子：" + p.x + "，" + p.y + "\n");
+                    currentChess = Chess.WHITE;
+                    game[p.x][p.y] = Chess.BLACK;
+                    checkWinner(p.x, p.y);
+                } else {
+                    taContent.appendText("[系统]请等待客户端走棋！\n");
                 }
-                server.sendMessage(server.buildMessage(HEAD_CHESS, p.toString()));
-                taContent.appendText("[主机]走子：" + p.x + "，" + p.y + "\n");
-                currentChess = Chess.WHITE;
-                game[p.x][p.y] = Chess.BLACK;
-                checkWinner(p.x, p.y);
             } else {
-                taContent.appendText("[系统]请等待客户端走棋\n");
+                taContent.appendText("[系统]客户端还没有准备好！\n");
             }
         } else if (netType == NetType.CLIENT) {
-            if (currentChess == Chess.WHITE) {
-                Position p = drawChess(currentChess, convertX(event.getX()), convertY(event.getY()));
-                if (game[p.x][p.y] == currentChess) {
-                    return;
+            if (isOtherOK) {
+                if (currentChess == Chess.WHITE) {
+                    Position p = drawChess(currentChess, convertX(event.getX()), convertY(event.getY()));
+                    if (game[p.x][p.y] == currentChess) {
+                        return;
+                    }
+                    client.sendMessage(client.buildMessage(HEAD_CHESS, p.toString()));
+                    taContent.appendText("[客户端]走子：" + p.x + "，" + p.y + "\n");
+                    currentChess = Chess.BLACK;
+                    game[p.x][p.y] = Chess.WHITE;
+                    checkWinner(p.x, p.y);
+                } else {
+                    taContent.appendText("[系统]请等待主机走棋！\n");
                 }
-                client.sendMessage(client.buildMessage(HEAD_CHESS, p.toString()));
-                taContent.appendText("[客户端]走子：" + p.x + "，" + p.y + "\n");
-                currentChess = Chess.BLACK;
-                game[p.x][p.y] = Chess.WHITE;
-                checkWinner(p.x, p.y);
             } else {
-                taContent.appendText("[系统]请等待主机走棋\n");
+                taContent.appendText("[系统]主机还没有准备好！\n");
             }
         }
+
     }
 
     private void checkWinner(int x, int y) {
@@ -131,6 +142,7 @@ public class Controller implements NetService.NetStateChange, EventHandler<Dialo
     }
 
     private void win(Chess thisChess) {
+        isOtherOK = false;
         Alert alert = new Alert(Alert.AlertType.INFORMATION, thisChess == Chess.BLACK ? "黑棋获胜！" : "白棋获胜", ButtonType.OK);
         alert.show();
         currentChess = Chess.BLACK;
@@ -140,8 +152,13 @@ public class Controller implements NetService.NetStateChange, EventHandler<Dialo
     @Override
     public void handle(DialogEvent event) {
         cleanChessBoard();
+        if (netType == NetType.CLIENT) {
+            client.sendMessage(client.buildMessage(HEAD_GAME, BODY_OK));
+        } else {
+            server.sendMessage(server.buildMessage(HEAD_GAME, BODY_OK));
+        }
+        game = new Chess[21][21];
     }
-
 
 
     private int countChessNum(Direction direction, Chess thisChess, int x, int y) {
@@ -276,6 +293,7 @@ public class Controller implements NetService.NetStateChange, EventHandler<Dialo
                 taContent.appendText("[客户端]" + tfMessage.getText() + "\n");
             }
         }
+        tfMessage.setText("");
     }
 
     @Override
@@ -309,6 +327,9 @@ public class Controller implements NetService.NetStateChange, EventHandler<Dialo
                 StringBuilder msgContent = new StringBuilder();
                 for (int i = 1; i < msgArray.length; i++) {
                     msgContent.append(msgArray[i]);
+                    if (i + 1 < msgArray.length) {
+                        msgContent.append(':');
+                    }
                 }
 
                 if (netType == NetType.SERVER) {
@@ -322,15 +343,19 @@ public class Controller implements NetService.NetStateChange, EventHandler<Dialo
                     taContent.appendText("[客户端]走子：" + msgArray[1] + "," + msgArray[2] + "\n");
                     Position p = drawChess(Chess.WHITE, Double.parseDouble(msgArray[1]) * gapX, Double.parseDouble(msgArray[2]) * gapY);
                     game[p.x][p.y] = Chess.WHITE;
-                    checkWinner(p.x, p.y);
                     currentChess = Chess.BLACK;
+                    checkWinner(p.x, p.y);
                 } else if (netType == NetType.CLIENT) {
                     taContent.appendText("[主机]走子：" + msgArray[1] + "," + msgArray[2] + "\n");
                     Position p = drawChess(Chess.BLACK, Double.parseDouble(msgArray[1]) * gapX, Double.parseDouble(msgArray[2]) * gapY);
                     game[p.x][p.y] = Chess.BLACK;
-                    checkWinner(p.x, p.y);
                     currentChess = Chess.WHITE;
+                    checkWinner(p.x, p.y);
                 }
+                break;
+            case HEAD_GAME:
+                isOtherOK = true;
+                break;
         }
     }
 
@@ -408,6 +433,9 @@ public class Main extends Application implements EventHandler<WindowEvent> {
 
 package sample;
 
+import javafx.concurrent.Service;
+import javafx.concurrent.Task;
+
 import java.io.*;
 import java.net.ServerSocket;
 import java.net.Socket;
@@ -432,17 +460,18 @@ public class NetService {
     private static NetService client;
     private static NetService server;
 
-    private NetService(){}
+    private NetService() {
+    }
 
-    public static NetService getInstance(Controller.NetType netType){
-        switch (netType){
+    public static NetService getInstance(Controller.NetType netType) {
+        switch (netType) {
             case CLIENT:
-                if(client==null){
+                if (client == null) {
                     client = new NetService();
                 }
                 return client;
             case SERVER:
-                if(server==null){
+                if (server == null) {
                     server = new NetService();
                 }
                 return server;
@@ -485,16 +514,23 @@ public class NetService {
     }
 
     public void sendMessage(String message) {
-        pw.println(message);
-        pw.flush();
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                pw.println(message);
+                pw.flush();
+            }
+        }).start();
     }
 
     public void close() {
         try {
-            br.close();
+//            br.close();
             pw.close();
             socket.close();
-            serverSocket.close();
+            if (Controller.netType == Controller.NetType.SERVER) {
+                serverSocket.close();
+            }
         } catch (IOException e) {
             e.printStackTrace();
         }
@@ -558,21 +594,30 @@ public class NetService {
         }
     }
 
-    class ReadThread extends Thread {
+    class ReadThread extends Service<String> {
 
         @Override
-        public void run() {
-            while (true) {
-                String message = readMessage();
-                if (message != null && message.length() > 0) {
-                    if (nsc != null) {
-                        nsc.onMessage(message);
-                    }
+        protected void succeeded() {
+            super.succeeded();
+            if (getValue() != null && getValue().length() > 0) {
+                if (nsc != null) {
+                    nsc.onMessage(getValue());
                 }
             }
+            this.restart();
+        }
+
+        @Override
+        protected Task<String> createTask() {
+            return new Task<String>() {
+                protected String call() throws Exception {
+                    return readMessage();
+                }
+            };
         }
     }
 }
+
 
 
 
