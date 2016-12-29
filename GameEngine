@@ -1,0 +1,287 @@
+package cn.wycode.engine;
+
+import android.app.Activity;
+import android.graphics.Canvas;
+import android.graphics.Color;
+import android.graphics.Paint;
+import android.os.Bundle;
+import android.util.Log;
+import android.view.MotionEvent;
+import android.view.SurfaceView;
+import android.view.View;
+import android.view.Window;
+import android.view.WindowManager;
+
+import cn.wycode.openbrick.R;
+import cn.wycode.openbrick.engine.Utils.ScreenInfo;
+import cn.wycode.openbrick.engine.Utils.Timer;
+
+
+/**
+ * 游戏引擎
+ * @author wycode
+ * @date 2016年12月29日18:18:24
+ * 
+ * 继承此类，复写相应方法
+ */
+public abstract class GameEngine extends Activity implements Runnable, View.OnTouchListener {
+
+    private SurfaceView mSurfaceView;
+    private Canvas mCanvas;
+    private static final int LOADING_DELAY = 2000;
+    private boolean isGaming;
+    private boolean isPause;
+    private int backgroundColor = Color.DKGRAY;
+
+    private boolean isShowFps;
+    private int maxFps = 60;
+    private Paint redPaint;
+
+    /**
+     * 在setContentView之前调用
+     * 主要用于初始化Activity属性等
+     */
+    public abstract void init();
+
+    /**
+     * 在setContentView之后调用
+     * 主要加载资源
+     */
+    public abstract void load();
+
+    /**
+     * 在绘制精灵之前调用
+     * 主要用于刷新游戏背景
+     *
+     * @param canvas 游戏画布
+     */
+    public abstract void draw(Canvas canvas);
+
+    /**
+     * 每帧循环时调用
+     * 用于刷新精灵属性
+     */
+    public abstract void update();
+
+    /**
+     * Touch事件回调
+     *
+     * @param event MotionEvent
+     */
+    public abstract void touch(MotionEvent event);
+
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        requestWindowFeature(Window.FEATURE_NO_TITLE);
+        getWindow().addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN);
+
+        initEngine();
+        init();
+
+        setContentView(R.layout.engine_layout);
+        final View loadingView = findViewById(R.id.engine_loading_view);
+        mSurfaceView = (SurfaceView) findViewById(R.id.surface);
+        mSurfaceView.setOnTouchListener(this);
+
+        final Thread gameThread = new Thread(this);
+
+        mSurfaceView.postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                loadingView.setVisibility(View.GONE);
+                isGaming = true;
+                gameThread.start();
+            }
+        }, LOADING_DELAY);
+
+        load();
+    }
+
+    private void initEngine() {
+        ScreenInfo.init(this);
+        redPaint = new Paint();
+        redPaint.setColor(Color.RED);
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        isPause = false;
+    }
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+        isPause = true;
+    }
+
+    @Override
+    public boolean onTouch(View view, MotionEvent motionEvent) {
+        touch(motionEvent);
+        return true;
+    }
+
+
+    @Override
+    public void run() {
+        int frameCount = 0;
+        int fps = 0;
+        Timer frameTimer = new Timer();
+
+        while (isGaming) {
+            if (isPause) continue;
+            Log.d("wy", "loop");
+
+            long frameStart = System.currentTimeMillis();
+
+            frameCount++;
+            if (frameTimer.elapse(1000)) {
+                fps = frameCount;
+                frameCount = 0;
+            }
+
+            update();
+
+            if (beginDraw()) {
+                mCanvas.drawColor(backgroundColor);
+                draw(mCanvas);
+
+
+                if (isShowFps) {
+                    mCanvas.drawText("FPS:" + fps, 0, redPaint.getTextSize(), redPaint);
+                }
+                endDrawing();
+            }
+
+            long frameEnd = System.currentTimeMillis();
+            long frameTime = frameEnd - frameStart;
+            if (frameTime > 1000 / maxFps) {
+                try {
+                    Thread.sleep(frameTime - 1000 / maxFps);
+                } catch (InterruptedException e) {
+                    //ignore this
+                }
+            }
+        }
+        finish();
+    }
+
+    private boolean beginDraw() {
+        if (mSurfaceView.getHolder().getSurface().isValid()) {
+            mCanvas = mSurfaceView.getHolder().lockCanvas();
+            return true;
+        }
+        return false;
+    }
+
+    private void endDrawing() {
+        mSurfaceView.getHolder().unlockCanvasAndPost(mCanvas);
+    }
+
+    public void setShowFps(boolean showFps) {
+        isShowFps = showFps;
+    }
+
+}
+
+
+
+
+package cn.wycode.engine.utils;
+
+import android.content.Context;
+import android.graphics.Point;
+
+/**
+ * Created by wycode on 2016/12/29.
+ */
+
+public class ScreenInfo {
+
+    public static Point center;
+    public static int width;
+    public static int height;
+    public static float density;
+
+    //不能构造此类对象
+    private ScreenInfo(){
+
+    }
+
+    public static void init(Context context){
+        density = context.getResources().getDisplayMetrics().density;
+        width = context.getResources().getDisplayMetrics().widthPixels;
+        height = context.getResources().getDisplayMetrics().heightPixels;
+        center = new Point(width / 2, height / 2);
+    }
+
+}
+
+
+
+package cn.wycode.engine.utils;
+
+
+
+public class Timer {
+
+    private long startCount;
+
+    public Timer(){
+        startCount = System.currentTimeMillis();
+    }
+
+    public boolean elapse(int ms){
+        if(System.currentTimeMillis()-startCount>ms){
+            startCount = System.currentTimeMillis();
+            return true;
+        }else{
+            return false;
+        }
+    }
+}
+
+
+
+
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent" android:layout_height="match_parent">
+    <SurfaceView
+        android:id="@+id/surface"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
+    <include
+        android:id="@+id/engine_loading_view"
+        layout="@layout/engine_loading_view"/>
+</FrameLayout>
+
+
+
+<?xml version="1.0" encoding="utf-8"?>
+<RelativeLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#34495E"
+    android:gravity="center">
+
+    <TextView
+        android:id="@+id/engine_logo"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center"
+        android:textAppearance="@style/TextAppearance.AppCompat.Display1"
+        android:text="WyCode Game Engine"
+        android:textColor="#1ABC9C">
+    </TextView>
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center"
+        android:layout_below="@id/engine_logo"
+        android:textAppearance="@style/TextAppearance.AppCompat.Display3"
+        android:text="Loading..."
+        android:textColor="#1ABC9C">
+    </TextView>
+</RelativeLayout>
