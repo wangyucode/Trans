@@ -1,27 +1,32 @@
-package cn.wycode.engine;
+package cn.wycode.openbrick.engine;
 
 import android.app.Activity;
+import android.content.Context;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
 import android.os.Bundle;
+import android.os.PowerManager;
 import android.util.Log;
 import android.view.MotionEvent;
 import android.view.SurfaceView;
 import android.view.View;
-import android.view.Window;
 import android.view.WindowManager;
 
+import java.util.concurrent.CopyOnWriteArrayList;
+
 import cn.wycode.openbrick.R;
-import cn.wycode.openbrick.engine.Utils.ScreenInfo;
-import cn.wycode.openbrick.engine.Utils.Timer;
+import cn.wycode.openbrick.engine.sprite.BaseSprite;
+import cn.wycode.openbrick.engine.utils.ScreenInfo;
+import cn.wycode.openbrick.engine.utils.Timer;
 
 
 /**
  * 游戏引擎
+ *
  * @author wycode
  * @date 2016年12月29日18:18:24
- * 
+ * <p>
  * 继承此类，复写相应方法
  */
 public abstract class GameEngine extends Activity implements Runnable, View.OnTouchListener {
@@ -36,6 +41,18 @@ public abstract class GameEngine extends Activity implements Runnable, View.OnTo
     private boolean isShowFps;
     private int maxFps = 60;
     private Paint redPaint;
+
+
+    private PowerManager.WakeLock wakeLock;
+
+    /**
+     * 精灵对象池
+     */
+    private CopyOnWriteArrayList<BaseSprite> spritePool;
+    /**
+     * 可回收精灵对象池
+     */
+    private CopyOnWriteArrayList<BaseSprite> spriteRecyclePool;
 
     /**
      * 在setContentView之前调用
@@ -73,7 +90,6 @@ public abstract class GameEngine extends Activity implements Runnable, View.OnTo
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        requestWindowFeature(Window.FEATURE_NO_TITLE);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN);
 
         initEngine();
@@ -96,12 +112,16 @@ public abstract class GameEngine extends Activity implements Runnable, View.OnTo
         }, LOADING_DELAY);
 
         load();
+
+        acquireWakeLock();
     }
 
     private void initEngine() {
         ScreenInfo.init(this);
         redPaint = new Paint();
         redPaint.setColor(Color.RED);
+        spritePool = new CopyOnWriteArrayList<>();
+        spriteRecyclePool = new CopyOnWriteArrayList<>();
     }
 
     @Override
@@ -117,9 +137,33 @@ public abstract class GameEngine extends Activity implements Runnable, View.OnTo
     }
 
     @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        releaseWakeLock();
+    }
+
+    @Override
     public boolean onTouch(View view, MotionEvent motionEvent) {
         touch(motionEvent);
         return true;
+    }
+
+    private void acquireWakeLock() {
+        if (wakeLock ==null) {
+            PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
+            wakeLock = pm.newWakeLock(PowerManager.SCREEN_BRIGHT_WAKE_LOCK, this.getClass().getCanonicalName());
+            wakeLock.acquire();
+        }
+
+    }
+
+
+    private void releaseWakeLock() {
+        if (wakeLock !=null&& wakeLock.isHeld()) {
+            wakeLock.release();
+            wakeLock =null;
+        }
+
     }
 
 
@@ -131,7 +175,6 @@ public abstract class GameEngine extends Activity implements Runnable, View.OnTo
 
         while (isGaming) {
             if (isPause) continue;
-            Log.d("wy", "loop");
 
             long frameStart = System.currentTimeMillis();
 
@@ -141,12 +184,23 @@ public abstract class GameEngine extends Activity implements Runnable, View.OnTo
                 frameCount = 0;
             }
 
+
             update();
 
             if (beginDraw()) {
                 mCanvas.drawColor(backgroundColor);
                 draw(mCanvas);
 
+                for (BaseSprite sprite : spritePool) {
+                    if(sprite.isAlive()){
+                        sprite.animation();
+                        sprite.draw(mCanvas);
+                    }else {
+                        spritePool.remove(sprite);
+                        sprite.removeAllAnimation();
+                        spriteRecyclePool.add(sprite);
+                    }
+                }
 
                 if (isShowFps) {
                     mCanvas.drawText("FPS:" + fps, 0, redPaint.getTextSize(), redPaint);
@@ -183,18 +237,26 @@ public abstract class GameEngine extends Activity implements Runnable, View.OnTo
         isShowFps = showFps;
     }
 
+    public void addSprite(BaseSprite sprite){
+        spritePool.add(sprite);
+    }
+
+
 }
 
 
 
 
-package cn.wycode.engine.utils;
+
+package cn.wycode.openbrick.engine.utils;
 
 import android.content.Context;
 import android.graphics.Point;
+import android.graphics.Rect;
+import android.graphics.RectF;
 
 /**
- * Created by wycode on 2016/12/29.
+ * Created by wWX383516 on 2016/12/29.
  */
 
 public class ScreenInfo {
@@ -203,6 +265,8 @@ public class ScreenInfo {
     public static int width;
     public static int height;
     public static float density;
+
+    public static RectF screenRect;
 
     //不能构造此类对象
     private ScreenInfo(){
@@ -214,33 +278,45 @@ public class ScreenInfo {
         width = context.getResources().getDisplayMetrics().widthPixels;
         height = context.getResources().getDisplayMetrics().heightPixels;
         center = new Point(width / 2, height / 2);
+        screenRect = new RectF(0,0,width,height);
     }
 
 }
 
 
 
-package cn.wycode.engine.utils;
 
+package cn.wycode.openbrick.engine.utils;
 
 
 public class Timer {
 
     private long startCount;
 
-    public Timer(){
+    public Timer() {
         startCount = System.currentTimeMillis();
     }
 
-    public boolean elapse(int ms){
-        if(System.currentTimeMillis()-startCount>ms){
-            startCount = System.currentTimeMillis();
+    public boolean elapse(int ms) {
+        if (System.currentTimeMillis() - startCount > ms) {
+            reset();
             return true;
-        }else{
+        } else {
             return false;
         }
     }
+
+    public void reset() {
+        startCount = System.currentTimeMillis();
+    }
+
+    public long getElapse() {
+        long dt = System.currentTimeMillis() - startCount;
+        reset();
+        return dt;
+    }
 }
+
 
 
 
@@ -285,3 +361,357 @@ public class Timer {
         android:textColor="#1ABC9C">
     </TextView>
 </RelativeLayout>
+
+
+
+
+package cn.wycode.openbrick.engine.animation;
+
+import cn.wycode.openbrick.engine.sprite.BaseSprite;
+import cn.wycode.openbrick.engine.utils.Timer;
+
+/**
+ * Created by wy
+ * on 2016/12/30.
+ */
+
+public abstract class BaseAnimation {
+
+    protected Timer animTimer;
+    protected BaseSprite sprite;
+    private boolean isDone;
+    protected boolean isLoop;
+
+    BaseAnimation(){
+        animTimer = new Timer();
+    }
+
+    public abstract void adjustChanges(BaseSprite sprite);
+
+    public boolean isDone() {
+        return isDone;
+    }
+
+    public void setDone(boolean done) {
+        isDone = done;
+    }
+
+    public boolean isLoop() {
+        return isLoop;
+    }
+
+    public void setLoop(boolean loop) {
+        isLoop = loop;
+    }
+}
+
+
+
+
+package cn.wycode.openbrick.engine.animation;
+
+import android.util.Log;
+
+import cn.wycode.openbrick.engine.sprite.BaseSprite;
+
+/**
+ * Created by wy
+ * on 2016/12/30.
+ */
+
+public class MoveAnimation extends BaseAnimation {
+
+    private float startX, startY, toX, toY;
+
+    private float speed;
+
+    private float degree;
+
+    private Type type;
+
+    public MoveAnimation(int toX, int toY, float speed) {
+        super();
+        this.toX = toX;
+        this.toY = toY;
+        this.speed = speed;
+
+        this.type = Type.TO_XY_SPEED;
+    }
+
+    public MoveAnimation(float degree, float speed) {
+        super();
+        this.speed = speed;
+        this.degree = degree;
+
+        this.type = Type.DEGREE_SPEED;
+    }
+
+
+    @Override
+    public void adjustChanges(BaseSprite sprite) {
+        if (this.sprite == null) {
+            this.sprite = sprite;
+            this.startX = sprite.getX();
+            this.startY = sprite.getY();
+            animTimer.reset();
+            return;
+        }
+        double vX, vY, x, y;
+        long dt;
+        switch (type) {
+            case TO_XY_SPEED:
+                double s = Math.sqrt(Math.pow(toX - sprite.getX(), 2) + Math.pow(toY - sprite.getY(), 2));
+                double t = s / speed;
+                vX = (toX - sprite.getX()) / t;
+                vY = (toY - sprite.getY()) / t;
+                dt = animTimer.getElapse();
+                x = sprite.getX() + vX * dt / 1000;
+                y = sprite.getY() + vY * dt / 1000;
+                if (toX - startX > 0) {
+                    if (x > toX) {
+                        x = toX;
+                        y = toY;
+                        setDone(true);
+                    }
+                } else {
+                    if (x < toX) {
+                        x = toX;
+                        y = toY;
+                        setDone(true);
+                    }
+                }
+                sprite.setX((float) x);
+                sprite.setY((float) y);
+                break;
+
+            case DEGREE_SPEED:
+                vX = Math.cos(Math.toRadians(degree)) * speed;
+                vY = Math.sin(Math.toRadians(degree)) * speed;
+                dt = animTimer.getElapse();
+                x = sprite.getX() + vX * dt / 1000;
+                y = sprite.getY() + vY * dt / 1000;
+                sprite.setX((float) x);
+                sprite.setY((float) y);
+                break;
+        }
+
+    }
+
+    private enum Type {
+        TO_XY_SPEED, DEGREE_SPEED
+    }
+}
+
+
+
+package cn.wycode.openbrick.engine.sprite;
+
+import android.graphics.Bitmap;
+import android.graphics.Canvas;
+import android.graphics.Color;
+import android.graphics.Paint;
+import android.graphics.Point;
+import android.graphics.Rect;
+import android.graphics.RectF;
+import android.util.Log;
+
+import java.util.concurrent.CopyOnWriteArrayList;
+
+import cn.wycode.openbrick.engine.animation.BaseAnimation;
+import cn.wycode.openbrick.engine.utils.ScreenInfo;
+
+/**
+ * Created by wy
+ * on 2016/12/30.
+ */
+
+public class BaseSprite implements SpriteAction {
+
+    private boolean isAlive;
+    private boolean collidable = true;
+    private Bitmap image;
+
+    private RectF boundRect;
+    private float x, y, w, h, centerX, centerY;
+
+    private int backgroundColor = Color.GREEN;
+    private Paint bgPaint;
+
+    private CopyOnWriteArrayList<BaseAnimation> animations;
+
+    public BaseSprite(int w, int h) {
+        this(null, 0, 0, w, h);
+    }
+
+    public BaseSprite(int x, int y, int w, int h) {
+        this(null, x, y, w, h);
+    }
+
+    public BaseSprite(Bitmap b, int x, int y, int w, int h) {
+        this.x = x;
+        this.y = y;
+        this.w = w;
+        this.h = h;
+        this.boundRect = new RectF(x, y, x + w, y + h);
+
+        this.bgPaint = new Paint();
+        this.isAlive = true;
+        bgPaint.setColor(backgroundColor);
+        bgPaint.setStyle(Paint.Style.FILL);
+
+        animations = new CopyOnWriteArrayList<>();
+    }
+
+
+    @Override
+    public void draw(Canvas c) {
+        c.drawRect(boundRect, bgPaint);
+    }
+
+    @Override
+    public void animation() {
+        for (BaseAnimation a : animations) {
+            if (!a.isDone()) {
+                Log.d("wy",a.toString());
+                a.adjustChanges(this);
+            }
+
+        }
+    }
+
+    public void addAnimation(BaseAnimation a) {
+        animations.add(a);
+    }
+
+    public void removeAllAnimation() {
+        animations.clear();
+    }
+
+    public static final int BOUND_LEFT = 1;
+    public static final int BOUND_TOP = 2;
+    public static final int BOUND_RIGHT = 3;
+    public static final int BOUND_BOTTOM = 4;
+    public static final int BOUND_NULL = 0;
+
+    public int reachedScreenBound() {
+        int bound;
+        if (boundRect.left < ScreenInfo.screenRect.left) {
+            bound = BOUND_LEFT;
+        } else if (boundRect.top < ScreenInfo.screenRect.top) {
+            bound = BOUND_TOP;
+        } else if (boundRect.right > ScreenInfo.screenRect.right) {
+            bound = BOUND_RIGHT;
+        } else if (boundRect.bottom > ScreenInfo.screenRect.bottom) {
+            bound = BOUND_BOTTOM;
+        }else{
+            bound = BOUND_NULL;
+        }
+        return bound;
+    }
+
+    public boolean isOutSideScreen() {
+        return !RectF.intersects(ScreenInfo.screenRect, boundRect);
+    }
+
+
+    public boolean isAlive() {
+        return isAlive;
+    }
+
+    public void setAlive(boolean alive) {
+        isAlive = alive;
+    }
+
+    public boolean isCollidable() {
+        return collidable;
+    }
+
+    public void setCollidable(boolean collidable) {
+        this.collidable = collidable;
+    }
+
+    public Bitmap getImage() {
+        return image;
+    }
+
+    public void setImage(Bitmap image) {
+        this.image = image;
+    }
+
+    public float getW() {
+        return boundRect.width();
+    }
+
+    public void setW(int w) {
+        boundRect.right = boundRect.left + w;
+        this.w = w;
+    }
+
+    public float getX() {
+        return boundRect.left;
+    }
+
+    public void setX(float x) {
+        if (this.x == x) {
+            return;
+        }
+        boundRect.left = x;
+        boundRect.right = x + w;
+    }
+
+    public float getY() {
+        return boundRect.top;
+    }
+
+    public void setY(float y) {
+        if (this.y == y) {
+            return;
+        }
+        boundRect.top = y;
+        boundRect.bottom = y + h;
+    }
+
+    public float getH() {
+        return boundRect.height();
+    }
+
+    public void setH(int h) {
+        boundRect.bottom = boundRect.top + h;
+        this.h = h;
+    }
+
+    public float getCenterX() {
+        return boundRect.centerX();
+    }
+
+    public float getCenterY() {
+        return boundRect.centerY();
+    }
+
+    public int getBackgroundColor() {
+        return backgroundColor;
+    }
+
+    public void setBackgroundColor(int backgroundColor) {
+        this.backgroundColor = backgroundColor;
+        this.bgPaint.setColor(backgroundColor);
+    }
+
+}
+
+
+
+package cn.wycode.openbrick.engine.sprite;
+
+import android.graphics.Canvas;
+
+/**
+ * Created by wy
+ * on 2016/12/30.
+ */
+
+public interface SpriteAction {
+
+    void draw(Canvas c);
+    void animation();
+}
