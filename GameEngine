@@ -1,18 +1,145 @@
 package cn.wycode.openbrick.engine;
 
+import android.graphics.Canvas;
+import android.graphics.Color;
+import android.util.Log;
+import android.view.MotionEvent;
+
+import cn.wycode.openbrick.engine.animation.BaseAnimation;
+import cn.wycode.openbrick.engine.animation.MoveAnimation;
+import cn.wycode.openbrick.engine.sprite.BaseSprite;
+import cn.wycode.openbrick.engine.utils.ScreenInfo;
+
+/**
+ * Created by wy
+ * on 2016/12/29.
+ */
+
+public class BrickDemo extends GameEngine {
+
+    private final String TAG = getClass().getSimpleName();
+
+    private BaseSprite ball, bat;
+
+    private int degree = -32;
+    private int speed = 50;
+
+    private int lastReach = BaseSprite.BOUND_NULL;
+
+    @Override
+    public void init() {
+        setShowFps(true);
+    }
+
+    @Override
+    public void load() {
+
+        int row = 5;
+        int column = 10;
+        float gap = 4;
+        float w = (ScreenInfo.width - ((column + 1) * gap)) / column;
+        gap += (ScreenInfo.width - w * column - gap * (column + 1)) / (column + 1);
+        int h = 10;
+        for (int i = 0; i < row; i++) {
+            for (int j = 0; j < column; j++) {
+                BaseSprite brick = new BaseSprite(gap + (w + gap) * j, gap + (h + gap) * i, w, h);
+                brick.setBackgroundColor(Color.YELLOW);
+                brick.setName("brick");
+                addSprite(brick);
+            }
+        }
+
+
+        ball = new BaseSprite(ScreenInfo.center.x, ScreenInfo.center.y, 10, 10);
+        ball.setName("ball");
+        BaseAnimation a = new MoveAnimation(degree, speed);
+        a.setTag("move");
+        ball.addAnimation(a);
+        addSprite(ball);
+
+        int batWidth = 30;
+        bat = new BaseSprite(ScreenInfo.center.x - batWidth / 2, ScreenInfo.height - 10, batWidth, 5);
+        bat.setBackgroundColor(Color.BLUE);
+        bat.setName("bat");
+        addSprite(bat);
+    }
+
+    @Override
+    public void draw(Canvas canvas) {
+
+    }
+
+    @Override
+    public void update() {
+        if (lastReach == ball.reachedScreenBound()) {
+            return;
+        }
+        lastReach = ball.reachedScreenBound();
+        MoveAnimation a;
+        switch (lastReach) {
+            case BaseSprite.BOUND_LEFT:
+            case BaseSprite.BOUND_RIGHT:
+                a = (MoveAnimation) ball.findAnimationByTag("move");
+                degree = 180 - degree;
+                a.setDegree(degree);
+                break;
+            case BaseSprite.BOUND_TOP:
+            case BaseSprite.BOUND_BOTTOM:
+                a = (MoveAnimation) ball.findAnimationByTag("move");
+                degree = -degree;
+                a.setDegree(degree);
+                break;
+        }
+    }
+
+    @Override
+    public void collided(BaseSprite a, BaseSprite b) {
+        float xIn = Math.abs(a.getW() - Math.abs(a.getX() - b.getX()));
+        float yIn = Math.abs(a.getH() - Math.abs(a.getY() - b.getY()));
+        if (xIn > yIn) {
+            MoveAnimation animation = (MoveAnimation) ball.findAnimationByTag("move");
+            degree = - degree;
+            animation.setDegree(degree);
+        } else {
+            MoveAnimation animation = (MoveAnimation) ball.findAnimationByTag("move");
+            degree = 180-degree;
+            animation.setDegree(degree);
+        }
+//        if (a.getName().equals("brick")) {
+//            a.setAlive(false);
+//        }
+//        if (b.getName().equals("brick")) {
+//            b.setAlive(false);
+//        }
+    }
+
+    @Override
+    public void touch(MotionEvent event) {
+
+    }
+}
+
+
+
+
+package cn.wycode.openbrick.engine;
+
 import android.app.Activity;
 import android.content.Context;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
+import android.nfc.Tag;
 import android.os.Bundle;
 import android.os.PowerManager;
 import android.util.Log;
 import android.view.MotionEvent;
+import android.view.SurfaceHolder;
 import android.view.SurfaceView;
 import android.view.View;
 import android.view.WindowManager;
 
+import java.util.ArrayList;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 import cn.wycode.openbrick.R;
@@ -29,7 +156,9 @@ import cn.wycode.openbrick.engine.utils.Timer;
  * <p>
  * 继承此类，复写相应方法
  */
-public abstract class GameEngine extends Activity implements Runnable, View.OnTouchListener {
+public abstract class GameEngine extends Activity implements Runnable, View.OnTouchListener, SurfaceHolder.Callback {
+
+    private final String TAG = "Engine";
 
     private SurfaceView mSurfaceView;
     private Canvas mCanvas;
@@ -37,6 +166,9 @@ public abstract class GameEngine extends Activity implements Runnable, View.OnTo
     private boolean isGaming;
     private boolean isPause;
     private int backgroundColor = Color.DKGRAY;
+    private int logoBgColor = Color.parseColor("#34495E");
+    private int logoTextColor = Color.parseColor("#1ABC9C");
+    private Paint logoPaint;
 
     private boolean isShowFps;
     private int maxFps = 60;
@@ -81,6 +213,12 @@ public abstract class GameEngine extends Activity implements Runnable, View.OnTo
     public abstract void update();
 
     /**
+     * 每帧循环时调用
+     * 碰撞回调
+     */
+    public abstract void collided(BaseSprite a, BaseSprite b);
+
+    /**
      * Touch事件回调
      *
      * @param event MotionEvent
@@ -95,31 +233,23 @@ public abstract class GameEngine extends Activity implements Runnable, View.OnTo
         initEngine();
         init();
 
-        setContentView(R.layout.engine_layout);
-        final View loadingView = findViewById(R.id.engine_loading_view);
-        mSurfaceView = (SurfaceView) findViewById(R.id.surface);
+        mSurfaceView = new SurfaceView(this);
+        setContentView(mSurfaceView);
+
+        mSurfaceView.getHolder().addCallback(this);
         mSurfaceView.setOnTouchListener(this);
-
-        final Thread gameThread = new Thread(this);
-
-        mSurfaceView.postDelayed(new Runnable() {
-            @Override
-            public void run() {
-                loadingView.setVisibility(View.GONE);
-                isGaming = true;
-                gameThread.start();
-            }
-        }, LOADING_DELAY);
+        mSurfaceView.setKeepScreenOn(true);
 
         load();
-
-        acquireWakeLock();
     }
 
     private void initEngine() {
         ScreenInfo.init(this);
         redPaint = new Paint();
         redPaint.setColor(Color.RED);
+        logoPaint = new Paint();
+        logoPaint.setAntiAlias(true);
+        logoPaint.setColor(logoTextColor);
         spritePool = new CopyOnWriteArrayList<>();
         spriteRecyclePool = new CopyOnWriteArrayList<>();
     }
@@ -137,35 +267,10 @@ public abstract class GameEngine extends Activity implements Runnable, View.OnTo
     }
 
     @Override
-    protected void onDestroy() {
-        super.onDestroy();
-        releaseWakeLock();
-    }
-
-    @Override
     public boolean onTouch(View view, MotionEvent motionEvent) {
         touch(motionEvent);
         return true;
     }
-
-    private void acquireWakeLock() {
-        if (wakeLock ==null) {
-            PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
-            wakeLock = pm.newWakeLock(PowerManager.SCREEN_BRIGHT_WAKE_LOCK, this.getClass().getCanonicalName());
-            wakeLock.acquire();
-        }
-
-    }
-
-
-    private void releaseWakeLock() {
-        if (wakeLock !=null&& wakeLock.isHeld()) {
-            wakeLock.release();
-            wakeLock =null;
-        }
-
-    }
-
 
     @Override
     public void run() {
@@ -184,18 +289,32 @@ public abstract class GameEngine extends Activity implements Runnable, View.OnTo
                 frameCount = 0;
             }
 
-
             update();
+
+            for (int i = 0; i < spritePool.size() - 1; i++) {
+                BaseSprite s1 = spritePool.get(i);
+                for (int j = i + 1; j < spritePool.size(); j++) {
+                    BaseSprite s2 = spritePool.get(j);
+                    if (s1 == s2) continue;
+                    if (!s1.isCollidable() || !s2.isCollidable()) continue;
+                    if (!s1.isAlive() || !s2.isAlive()) continue;
+
+                    if (s1.getCollisionRect().intersect(s1.getCollisionRect())) {
+                        collided(s1, s2);
+                    }
+                }
+            }
 
             if (beginDraw()) {
                 mCanvas.drawColor(backgroundColor);
                 draw(mCanvas);
 
                 for (BaseSprite sprite : spritePool) {
-                    if(sprite.isAlive()){
+                    if (sprite.isAlive()) {
                         sprite.animation();
+//                        Log.v(TAG,"draw sprite:x="+sprite.getX()+",y="+sprite.getY());
                         sprite.draw(mCanvas);
-                    }else {
+                    } else {
                         spritePool.remove(sprite);
                         sprite.removeAllAnimation();
                         spriteRecyclePool.add(sprite);
@@ -205,8 +324,9 @@ public abstract class GameEngine extends Activity implements Runnable, View.OnTo
                 if (isShowFps) {
                     mCanvas.drawText("FPS:" + fps, 0, redPaint.getTextSize(), redPaint);
                 }
-                endDrawing();
+                endDraw();
             }
+
 
             long frameEnd = System.currentTimeMillis();
             long frameTime = frameEnd - frameStart;
@@ -229,7 +349,7 @@ public abstract class GameEngine extends Activity implements Runnable, View.OnTo
         return false;
     }
 
-    private void endDrawing() {
+    private void endDraw() {
         mSurfaceView.getHolder().unlockCanvasAndPost(mCanvas);
     }
 
@@ -237,12 +357,40 @@ public abstract class GameEngine extends Activity implements Runnable, View.OnTo
         isShowFps = showFps;
     }
 
-    public void addSprite(BaseSprite sprite){
+    public void addSprite(BaseSprite sprite) {
         spritePool.add(sprite);
     }
 
 
+    @Override
+    public void surfaceCreated(SurfaceHolder holder) {
+        Log.d(TAG, "surfaceDestroyed");
+        beginDraw();
+        mCanvas.drawColor(logoBgColor);
+        mCanvas.drawText("Powered by wycode.cn", 10, ScreenInfo.height - 10, logoPaint);
+        endDraw();
+        final Thread gameThread = new Thread(this);
+        mSurfaceView.postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                isGaming = true;
+                gameThread.start();
+            }
+        }, LOADING_DELAY);
+    }
+
+    @Override
+    public void surfaceChanged(SurfaceHolder holder, int format, int width, int height) {
+        Log.d(TAG, "surfaceChanged:width=" + width + ",height=" + height);
+    }
+
+    @Override
+    public void surfaceDestroyed(SurfaceHolder holder) {
+        Log.d(TAG, "surfaceDestroyed");
+        finish();
+    }
 }
+
 
 
 
@@ -320,51 +468,6 @@ public class Timer {
 
 
 
-
-<?xml version="1.0" encoding="utf-8"?>
-<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
-    android:layout_width="match_parent" android:layout_height="match_parent">
-    <SurfaceView
-        android:id="@+id/surface"
-        android:layout_width="match_parent"
-        android:layout_height="match_parent" />
-    <include
-        android:id="@+id/engine_loading_view"
-        layout="@layout/engine_loading_view"/>
-</FrameLayout>
-
-
-
-<?xml version="1.0" encoding="utf-8"?>
-<RelativeLayout xmlns:android="http://schemas.android.com/apk/res/android"
-    android:layout_width="match_parent"
-    android:layout_height="match_parent"
-    android:background="#34495E"
-    android:gravity="center">
-
-    <TextView
-        android:id="@+id/engine_logo"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:gravity="center"
-        android:textAppearance="@style/TextAppearance.AppCompat.Display1"
-        android:text="WyCode Game Engine"
-        android:textColor="#1ABC9C">
-    </TextView>
-    <TextView
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:gravity="center"
-        android:layout_below="@id/engine_logo"
-        android:textAppearance="@style/TextAppearance.AppCompat.Display3"
-        android:text="Loading..."
-        android:textColor="#1ABC9C">
-    </TextView>
-</RelativeLayout>
-
-
-
-
 package cn.wycode.openbrick.engine.animation;
 
 import cn.wycode.openbrick.engine.sprite.BaseSprite;
@@ -376,11 +479,22 @@ import cn.wycode.openbrick.engine.utils.Timer;
  */
 
 public abstract class BaseAnimation {
+    protected final String TAG = getClass().getSimpleName();
 
     protected Timer animTimer;
     protected BaseSprite sprite;
     private boolean isDone;
     protected boolean isLoop;
+
+    private Object tag;
+
+    public Object getTag() {
+        return tag;
+    }
+
+    public void setTag(Object tag) {
+        this.tag = tag;
+    }
 
     BaseAnimation(){
         animTimer = new Timer();
@@ -408,6 +522,7 @@ public abstract class BaseAnimation {
 
 
 
+
 package cn.wycode.openbrick.engine.animation;
 
 import android.util.Log;
@@ -428,6 +543,10 @@ public class MoveAnimation extends BaseAnimation {
     private float degree;
 
     private Type type;
+
+    private enum Type {
+        TO_XY_SPEED, DEGREE_SPEED
+    }
 
     public MoveAnimation(int toX, int toY, float speed) {
         super();
@@ -454,7 +573,6 @@ public class MoveAnimation extends BaseAnimation {
             this.startX = sprite.getX();
             this.startY = sprite.getY();
             animTimer.reset();
-            return;
         }
         double vX, vY, x, y;
         long dt;
@@ -488,6 +606,7 @@ public class MoveAnimation extends BaseAnimation {
                 vX = Math.cos(Math.toRadians(degree)) * speed;
                 vY = Math.sin(Math.toRadians(degree)) * speed;
                 dt = animTimer.getElapse();
+
                 x = sprite.getX() + vX * dt / 1000;
                 y = sprite.getY() + vY * dt / 1000;
                 sprite.setX((float) x);
@@ -497,10 +616,15 @@ public class MoveAnimation extends BaseAnimation {
 
     }
 
-    private enum Type {
-        TO_XY_SPEED, DEGREE_SPEED
+    public float getDegree() {
+        return degree;
+    }
+
+    public void setDegree(float degree) {
+        this.degree = degree;
     }
 }
+
 
 
 
@@ -527,11 +651,14 @@ import cn.wycode.openbrick.engine.utils.ScreenInfo;
 
 public class BaseSprite implements SpriteAction {
 
+    private final String TAG = getClass().getSimpleName();
+
+    private String name;
     private boolean isAlive;
     private boolean collidable = true;
     private Bitmap image;
 
-    private RectF boundRect;
+    private RectF boundRect,collisionRect;
     private float x, y, w, h, centerX, centerY;
 
     private int backgroundColor = Color.GREEN;
@@ -539,20 +666,21 @@ public class BaseSprite implements SpriteAction {
 
     private CopyOnWriteArrayList<BaseAnimation> animations;
 
-    public BaseSprite(int w, int h) {
+    public BaseSprite(float w, float h) {
         this(null, 0, 0, w, h);
     }
 
-    public BaseSprite(int x, int y, int w, int h) {
+    public BaseSprite(float x, float y, float w, float h) {
         this(null, x, y, w, h);
     }
 
-    public BaseSprite(Bitmap b, int x, int y, int w, int h) {
+    public BaseSprite(Bitmap b, float x, float y, float w, float h) {
         this.x = x;
         this.y = y;
         this.w = w;
         this.h = h;
         this.boundRect = new RectF(x, y, x + w, y + h);
+        this.collisionRect = boundRect;
 
         this.bgPaint = new Paint();
         this.isAlive = true;
@@ -572,7 +700,6 @@ public class BaseSprite implements SpriteAction {
     public void animation() {
         for (BaseAnimation a : animations) {
             if (!a.isDone()) {
-                Log.d("wy",a.toString());
                 a.adjustChanges(this);
             }
 
@@ -587,6 +714,15 @@ public class BaseSprite implements SpriteAction {
         animations.clear();
     }
 
+    public BaseAnimation findAnimationByTag(Object tag){
+        for (BaseAnimation a : animations) {
+            if(a.getTag().equals(tag)){
+                return a;
+            }
+        }
+        return null;
+    }
+
     public static final int BOUND_LEFT = 1;
     public static final int BOUND_TOP = 2;
     public static final int BOUND_RIGHT = 3;
@@ -595,6 +731,7 @@ public class BaseSprite implements SpriteAction {
 
     public int reachedScreenBound() {
         int bound;
+
         if (boundRect.left < ScreenInfo.screenRect.left) {
             bound = BOUND_LEFT;
         } else if (boundRect.top < ScreenInfo.screenRect.top) {
@@ -697,7 +834,27 @@ public class BaseSprite implements SpriteAction {
         this.bgPaint.setColor(backgroundColor);
     }
 
+    public RectF getBoundRect() {
+        return boundRect;
+    }
+
+    public RectF getCollisionRect() {
+        return collisionRect;
+    }
+
+    public void setCollisionRect(RectF collisionRect) {
+        this.collisionRect = collisionRect;
+    }
+
+    public String getName() {
+        return name;
+    }
+
+    public void setName(String name) {
+        this.name = name;
+    }
 }
+
 
 
 
